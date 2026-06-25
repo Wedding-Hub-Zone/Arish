@@ -2128,100 +2128,8 @@
     }
 
     // ----------------------------------------------------
-    // PERSISTENT INDEXEDDB VIDEO ENGINE
+    // PERSISTENT SERVER-SIDE VIDEO ENGINE
     // ----------------------------------------------------
-    const DB_NAME = 'EngagementVideoDB';
-    const STORE_NAME = 'VideosStore';
-    const KEY_NAME = 'custom_video';
-
-    function initIndexedDB(callback) {
-      const request = indexedDB.open(DB_NAME, 1);
-      
-      request.onupgradeneeded = (e) => {
-        const db = e.target.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
-        }
-      };
-
-      request.onsuccess = (e) => {
-        callback(null, e.target.result);
-      };
-
-      request.onerror = (e) => {
-        callback(e.target.error, null);
-      };
-    }
-
-    function saveVideoToDB(file, callback) {
-      initIndexedDB((err, db) => {
-        if (err) {
-          if (callback) callback(err);
-          return;
-        }
-        try {
-          const tx = db.transaction(STORE_NAME, 'readwrite');
-          const store = tx.objectStore(STORE_NAME);
-          const putRequest = store.put(file, KEY_NAME);
-          
-          putRequest.onsuccess = () => {
-            if (callback) callback(null);
-          };
-          putRequest.onerror = (e) => {
-            if (callback) callback(e.target.error);
-          };
-        } catch (e) {
-          if (callback) callback(e);
-        }
-      });
-    }
-
-    function loadVideoFromDB(callback) {
-      initIndexedDB((err, db) => {
-        if (err) {
-          callback(err, null);
-          return;
-        }
-        try {
-          const tx = db.transaction(STORE_NAME, 'readonly');
-          const store = tx.objectStore(STORE_NAME);
-          const getRequest = store.get(KEY_NAME);
-          
-          getRequest.onsuccess = (e) => {
-            callback(null, e.target.result);
-          };
-          getRequest.onerror = (e) => {
-            callback(e.target.error, null);
-          };
-        } catch (e) {
-          callback(e, null);
-        }
-      });
-    }
-
-    function deleteVideoFromDB(callback) {
-      initIndexedDB((err, db) => {
-        if (err) {
-          if (callback) callback(err);
-          return;
-        }
-        try {
-          const tx = db.transaction(STORE_NAME, 'readwrite');
-          const store = tx.objectStore(STORE_NAME);
-          const deleteRequest = store.delete(KEY_NAME);
-          
-          deleteRequest.onsuccess = () => {
-            if (callback) callback(null);
-          };
-          deleteRequest.onerror = (e) => {
-            if (callback) callback(e.target.error);
-          };
-        } catch (e) {
-          if (callback) callback(e);
-        }
-      });
-    }
-
     function initVideoUploadEngine() {
       const dropZone = document.getElementById('video-drop-zone');
       const fileInput = document.getElementById('video-file-input');
@@ -2229,7 +2137,6 @@
       const uploadBtn = document.getElementById('upload-btn');
       const resetBtn = document.getElementById('reset-video-btn');
       const statusBadge = document.getElementById('video-status-badge');
-      let currentObjectUrl = null;
 
       // Helper to update UI states based on custom video presence
       function updateVideoStates(isCustom) {
@@ -2242,14 +2149,24 @@
         }
       }
 
-      // Load persistent video on startup
-      loadVideoFromDB((err, fileBlob) => {
-        if (!err && fileBlob) {
-          currentObjectUrl = URL.createObjectURL(fileBlob);
-          videoEl.src = currentObjectUrl;
-          updateVideoStates(true);
-        }
-      });
+      // Load persistent video status on startup from the server
+      fetch('/api/video-status')
+        .then(res => res.json())
+        .then(data => {
+          if (data.hasCustomVideo && data.url) {
+            // Add a cache buster timestamp to avoid stale browser cache
+            videoEl.src = data.url + '?t=' + Date.now();
+            updateVideoStates(true);
+          } else {
+            videoEl.src = 'https://assets.mixkit.co/videos/preview/mixkit-wedding-couple-holding-hands-40101-large.mp4';
+            updateVideoStates(false);
+          }
+        })
+        .catch(err => {
+          console.error('Error fetching custom video status:', err);
+          videoEl.src = 'https://assets.mixkit.co/videos/preview/mixkit-wedding-couple-holding-hands-40101-large.mp4';
+          updateVideoStates(false);
+        });
 
       // Handle file selection
       function handleVideoFile(file) {
@@ -2259,21 +2176,44 @@
           return;
         }
 
-        // Play video immediately
-        if (currentObjectUrl) {
-          URL.revokeObjectURL(currentObjectUrl);
-        }
-        currentObjectUrl = URL.createObjectURL(file);
-        videoEl.src = currentObjectUrl;
-        videoEl.play().catch(e => console.log('Auto-play failed, waiting for user interaction'));
+        // Show uploading state
+        uploadBtn.disabled = true;
+        const originalBtnHTML = uploadBtn.innerHTML;
+        uploadBtn.innerHTML = `
+          <svg class="w-3.5 h-3.5 animate-spin mr-1" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          Uploading Video...
+        `;
 
-        // Persist to IndexedDB
-        saveVideoToDB(file, (err) => {
-          if (err) {
-            console.error('Failed to persist video in IndexedDB:', err);
-          } else {
+        // Upload to server using fetch streaming request body
+        fetch('/api/upload-video', {
+          method: 'POST',
+          headers: {
+            'Content-Type': file.type
+          },
+          body: file
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.url) {
+            // Reload the video player with the newly uploaded server video
+            const cacheBustedUrl = data.url + '?t=' + Date.now();
+            videoEl.src = cacheBustedUrl;
+            videoEl.play().catch(e => console.log('Auto-play failed, waiting for user interaction'));
             updateVideoStates(true);
+          } else {
+            alert('Failed to upload video to server. Please try again.');
           }
+        })
+        .catch(err => {
+          console.error('Error uploading video:', err);
+          alert('Error uploading video to server. Please check your network connection.');
+        })
+        .finally(() => {
+          uploadBtn.disabled = false;
+          uploadBtn.innerHTML = originalBtnHTML;
         });
       }
 
@@ -2315,14 +2255,24 @@
       // Reset Button
       resetBtn.addEventListener('click', (e) => {
         e.stopPropagation(); // prevent triggering click on dropzone
-        if (confirm('Are you sure you want to restore the default video?')) {
-          if (currentObjectUrl) {
-            URL.revokeObjectURL(currentObjectUrl);
-            currentObjectUrl = null;
-          }
-          videoEl.src = 'https://assets.mixkit.co/videos/preview/mixkit-wedding-couple-holding-hands-40101-large.mp4';
-          deleteVideoFromDB(() => {
+        if (confirm('Are you sure you want to restore the default wedding video?')) {
+          resetBtn.disabled = true;
+          fetch('/api/reset-video', {
+            method: 'POST'
+          })
+          .then(res => res.json())
+          .then(data => {
+            videoEl.src = 'https://assets.mixkit.co/videos/preview/mixkit-wedding-couple-holding-hands-40101-large.mp4';
             updateVideoStates(false);
+          })
+          .catch(err => {
+            console.error('Error resetting video:', err);
+            // Fallback UI reset anyway
+            videoEl.src = 'https://assets.mixkit.co/videos/preview/mixkit-wedding-couple-holding-hands-40101-large.mp4';
+            updateVideoStates(false);
+          })
+          .finally(() => {
+            resetBtn.disabled = false;
           });
         }
       });
