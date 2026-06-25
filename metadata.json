@@ -1,0 +1,6 @@
+{
+  "name": "Shaba & Arish Muslim Wedding",
+  "description": "An elegant, premium, responsive digital Muslim wedding invitation website for Shaba Khan and Mohammad Arish Khan featuring Bismillah calligraphy, royal countdown, RSVP, Sufi background music, and interactive timeline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
